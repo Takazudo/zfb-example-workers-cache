@@ -1,0 +1,27 @@
+{
+  "name": "zfb-example-workers-cache",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "rm -rf build dist .zfb output worker",
+    "dev": "zfb dev",
+    "build": "zfb build",
+    "preview": "zfb preview",
+    "typecheck": "zfb check"
+  },
+  "dependencies": {
+    "@takazudo/zfb": "0.1.0-next.78",
+    "@takazudo/zfb-adapter-cloudflare": "0.1.0-next.78",
+    "@takazudo/zfb-runtime": "0.1.0-next.78",
+    "preact": "^10.29.1",
+    "preact-render-to-string": "^6.6.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "wrangler": "4.85.0"
+  },
+  "packageManager": "pnpm@10.34.1",
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

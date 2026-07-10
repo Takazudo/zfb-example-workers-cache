@@ -1,0 +1,92 @@
+# Cloudflare Workers (static assets) deploy for this zfb example.
+#
+#   build  — always runs (push + PR): install, typecheck (`zfb check`), build
+#            (`zfb build`). This is the L3 build-output gate; it needs no
+#            Cloudflare credentials, so a fresh clone/fork is green immediately.
+#   deploy — push to `main` only: runs `wrangler deploy`, but SELF-SKIPS when
+#              * secrets.CLOUDFLARE_API_TOKEN is unset, or
+#              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
+#            So the repo never shows a red deploy before Cloudflare is wired up.
+#
+# Enable deploys by adding, in repo Settings -> Secrets and variables -> Actions:
+#   CLOUDFLARE_API_TOKEN   token with Account · Workers Scripts: Edit
+#                          (+ Workers KV Storage: Edit / Workers AI: Read as the
+#                          demo's bindings require)
+#   CLOUDFLARE_ACCOUNT_ID  target Cloudflare account id
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (typecheck + zfb build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+
+  deploy:
+    name: Deploy to Cloudflare Workers
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Preflight — is Cloudflare configured?
+        id: preflight
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set — skipping deploy. Add it and CLOUDFLARE_ACCOUNT_ID in repo Settings to enable deploys."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif grep -q "REPLACE_WITH" wrangler.toml; then
+            echo "::notice::wrangler.toml still has a REPLACE_WITH_* placeholder — provision the resource, commit the real id, then deploy will run."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy
+        if: steps.preflight.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy

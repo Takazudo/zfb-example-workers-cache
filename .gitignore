@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+output/
+worker/
+.zfb/
+.zfb-build/
+.wrangler/
+.dev.vars
+# zfb temp file stranded on abnormal termination — Takazudo/zudo-front-builder#821
+zfb-tailwind-entry-*.css
+.DS_Store
