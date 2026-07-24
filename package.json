@@ -10,9 +10,9 @@
     "typecheck": "zfb check"
   },
   "dependencies": {
-    "@takazudo/zfb": "0.1.0-next.89",
-    "@takazudo/zfb-adapter-cloudflare": "0.1.0-next.89",
-    "@takazudo/zfb-runtime": "0.1.0-next.89",
+    "@takazudo/zfb": "0.1.0-next.96",
+    "@takazudo/zfb-adapter-cloudflare": "0.1.0-next.96",
+    "@takazudo/zfb-runtime": "0.1.0-next.96",
     "preact": "^10.29.1",
     "preact-render-to-string": "^6.6.6"
   },
