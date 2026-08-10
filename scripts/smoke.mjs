@@ -56,19 +56,39 @@ function skip(reason) {
 }
 
 /**
- * Walk an Error's `cause` chain collecting every `code`, since fetch wraps the
- * underlying network error in a bare TypeError. Falls back to error names only
- * when nothing in the chain carried a code (e.g. an AbortSignal TimeoutError).
+ * Collect every `code` reachable from an Error, since fetch reports network
+ * failures as a bare `TypeError: fetch failed` that hides the real reason.
+ *
+ * Both links must be followed. `cause` carries the wrapped error, but a host
+ * that resolves to several addresses (any dual-stack A + AAAA name, including
+ * localhost) fails as an AggregateError whose per-address errors live in
+ * `errors` — walking only `cause` finds no code at all there, which previously
+ * made a refused connection look like an unrecognised failure instead of the
+ * "not wired up yet" case it is.
+ *
+ * Falls back to error names only when nothing carried a code (e.g. an
+ * AbortSignal TimeoutError).
  */
 function errorCodes(error) {
   const codes = [];
   const names = [];
-  for (let current = error; current; current = current.cause) {
+  const seen = new Set();
+  const queue = [error];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+
     if (current.code) codes.push(String(current.code));
     if (current.name) names.push(String(current.name));
+
+    if (current.cause) queue.push(current.cause);
+    if (Array.isArray(current.errors)) queue.push(...current.errors);
   }
-  if (codes.length > 0) return codes;
-  return names.filter((name) => name !== "Error" && name !== "TypeError");
+
+  if (codes.length > 0) return [...new Set(codes)];
+  return [...new Set(names)].filter((name) => name !== "Error" && name !== "TypeError" && name !== "AggregateError");
 }
 
 /**
@@ -166,7 +186,15 @@ function checkCacheContract(path, response, { directives, varyIncludes }) {
 
 /** Reuses the probe's response — this is the request that proves the domain is attached at all. */
 async function checkRootPage(contract) {
-  const response = await probeReachable();
+  let response;
+  try {
+    response = await probeReachable();
+  } catch (error) {
+    // probeReachable() re-throws anything it would not skip on, i.e. a failure
+    // that is not "the domain isn't wired up yet". That is a genuine failure.
+    failures.push(`GET / failed with a non-transport error: ${errorCodes(error).join(" / ") || error.message}`);
+    return;
+  }
 
   if (!check(response.status === 200, `GET / returned ${response.status}, expected 200`)) return;
 
@@ -183,7 +211,16 @@ async function checkRootPage(contract) {
 }
 
 async function checkRoute(contract) {
-  const response = await get(contract.path);
+  let response;
+  try {
+    response = await get(contract.path);
+  } catch (error) {
+    // The root probe already proved the host is reachable, so a transport error
+    // here is a real defect — record it as a normal failure rather than letting
+    // it unwind into main()'s catch-all and report as a crash.
+    failures.push(`GET ${contract.path} failed: ${errorCodes(error).join(" / ") || error.message}`);
+    return;
+  }
   if (!check(response.status === 200, `GET ${contract.path} returned ${response.status}, expected 200`)) return;
   checkCacheContract(contract.path, response, contract);
 }
@@ -201,7 +238,16 @@ async function observeCacheBehavior() {
   const renderedAt = [];
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await get("/products");
+    let response;
+    try {
+      response = await get("/products");
+    } catch (error) {
+      // This whole function is an observation, so a blip here must never reach
+      // main()'s catch-all — that would fail the job on exactly the kind of
+      // nondeterminism this function exists to keep out of the pass/fail path.
+      notes.push(`Cache observation stopped early: ${errorCodes(error).join(" / ") || error.message}. Not a failure — the assertions above already passed.`);
+      break;
+    }
     statuses.push(response.headers.get("cf-cache-status") ?? "(none)");
     const body = await response.text();
     const stamp = body.match(/<strong>(\d{4}-\d{2}-\d{2}T[\d:.]+Z)<\/strong>/);
@@ -209,6 +255,8 @@ async function observeCacheBehavior() {
     if (statuses.at(-1) === "HIT") break;
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
+
+  if (statuses.length === 0) return;
 
   const sawHit = statuses.includes("HIT");
   const stableStamp = renderedAt.length > 1 && renderedAt.at(-1) === renderedAt[0];
