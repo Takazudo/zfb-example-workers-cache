@@ -7,11 +7,17 @@
 #              * secrets.CLOUDFLARE_API_TOKEN is unset, or
 #              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
 #            So the repo never shows a red deploy before Cloudflare is wired up.
+#   smoke  — after a real deploy: checks the live custom domain actually serves
+#            this site with the expected cache headers. Self-skips (green) while
+#            the domain is still provisioning. See scripts/smoke.mjs.
 #
 # Enable deploys by adding, in repo Settings -> Secrets and variables -> Actions:
 #   CLOUDFLARE_API_TOKEN   token with Account · Workers Scripts: Edit
-#                          (+ Workers KV Storage: Edit / Workers AI: Read as the
-#                          demo's bindings require)
+#                          AND Zone · Workers Routes: Edit on the
+#                          takazudomodular.com zone — the latter is required to
+#                          create the custom-domain route in wrangler.toml.
+#                          Without it `wrangler deploy` uploads the worker and
+#                          then fails on the route step.
 #   CLOUDFLARE_ACCOUNT_ID  target Cloudflare account id
 name: Deploy
 
@@ -90,3 +96,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
+
+      # Only a live request can confirm the custom domain is really attached —
+      # `wrangler deploy` succeeding says nothing about DNS or the edge TLS cert.
+      # The script self-skips (exit 0) while the domain is still provisioning, so
+      # this never turns the deploy red before Cloudflare is wired up. It skips
+      # with the deploy step when the preflight found no credentials.
+      - name: Smoke test the live custom domain
+        if: steps.preflight.outputs.ready == 'true'
+        timeout-minutes: 5
+        run: pnpm smoke
