@@ -162,6 +162,9 @@ request creates the entry.
 
 ## Continuous deployment (GitHub Actions)
 
+For an ordered from-zero walkthrough of the steps below, see
+[`docs/cloudflare-setup.md`](docs/cloudflare-setup.md).
+
 This repo ships `.github/workflows/deploy.yml`:
 
 - **build** runs on every push and PR — `pnpm install`, `pnpm typecheck`,
