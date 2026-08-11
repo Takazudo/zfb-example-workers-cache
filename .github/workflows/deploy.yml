@@ -8,8 +8,10 @@
 #              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
 #            So the repo never shows a red deploy before Cloudflare is wired up.
 #   smoke  — after a real deploy: checks the live custom domain actually serves
-#            this site with the expected cache headers. Self-skips (green) while
-#            the domain is still provisioning. See scripts/smoke.mjs.
+#            this site with the expected cache headers. The domain is confirmed
+#            live, so this runs with SMOKE_REQUIRE_LIVE=1: the script's
+#            "still provisioning" skip is retired and an unreachable domain now
+#            fails the job. See scripts/smoke.mjs.
 #
 # Enable deploys by adding, in repo Settings -> Secrets and variables -> Actions:
 #   CLOUDFLARE_API_TOKEN   token with Account · Workers Scripts: Edit
@@ -102,10 +104,15 @@ jobs:
 
       # Only a live request can confirm the custom domain is really attached —
       # `wrangler deploy` succeeding says nothing about DNS or the edge TLS cert.
-      # The script self-skips (exit 0) while the domain is still provisioning, so
-      # this never turns the deploy red before Cloudflare is wired up. It skips
-      # with the deploy step when the preflight found no credentials.
+      # The step still skips alongside the deploy when the preflight found no
+      # credentials, so a fresh clone/fork stays green.
       - name: Smoke test the live custom domain
         if: steps.preflight.outputs.ready == 'true'
         timeout-minutes: 5
+        env:
+          # The domain is live, so "not serving yet" is no longer a provisioning
+          # state — it is an outage. This retires the script's skip path. It does
+          # not touch the cache HIT nondeterminism tolerance, which stays
+          # non-fatal because the answering PoP still varies run to run.
+          SMOKE_REQUIRE_LIVE: "1"
         run: pnpm smoke
