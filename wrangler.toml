@@ -1,12 +1,81 @@
+# Cloudflare Workers Static Assets configuration
+
 name = "zfb-example-workers-cache"
 main = "./dist/_worker.js"
+
+# The 2026-05-01 date is deliberate: Wrangler 4.85.0 accepts the [cache] block
+# below at this date, but its local runtime rejected newer compatibility dates
+# during verification. Re-check `pnpm preview` before bumping.
 compatibility_date = "2026-05-01"
+# nodejs_compat is required by the zfb Cloudflare adapter bundle at
+# dist/_worker.js, which imports node:async_hooks (AsyncLocalStorage). Without
+# this flag wrangler refuses to load the worker even when dist/_worker.js exists.
 compatibility_flags = ["nodejs_compat"]
 
+# Top-level fields (MUST stay above BOTH the [assets] and [cache] tables — in
+# TOML any key after a table header is scoped into that table; if these sit under
+# either one, wrangler warns "Unexpected fields found in assets field" and
+# silently ignores them).
+#
+# workers_dev keeps the worker's public *.workers.dev subdomain
+# (zfb-example-workers-cache.takazudo.workers.dev) serving alongside the custom
+# domain configured at the bottom of this file. Keeping both is useful for this
+# example specifically: workers.dev has no zone attached, so it is the control
+# case for the zone-scoped cache features the custom domain unlocks.
+workers_dev = true
+
+# preview_urls enables *.workers.dev version-preview URLs for per-deploy preview
+# aliases. It DEFAULTS TO MATCH workers_dev, so an omitted value would silently
+# flip to false the moment workers_dev is turned off, killing every preview URL.
+# Set it explicitly so previews survive that change.
+preview_urls = true
+
+# ---------------------------------------------------------------------------
+# Static asset serving
+#
+# not_found_handling = "404-page" serves dist/404.html for unmatched GETs.
+#
+# run_worker_first = false means the asset layer is consulted before the worker
+# script; the worker only runs when no matching asset is found. Correct here —
+# every page in pages/ is `prerender = false`, so none of them exist as static
+# files and all of them reach the worker. (This example does no per-request
+# gating, which is the case that would require `true`.)
+#
+# .assetsignore: zfb's build writes one into dist/ listing _worker.js and
+# _zfb_inner.mjs so those are excluded from the public asset directory. It is
+# generated at build time — not committed.
+# ---------------------------------------------------------------------------
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
+run_worker_first = false
 
+# Workers Cache — the whole point of this example. Routes in pages/ drive reuse
+# purely from response headers (Cache-Control / Cache-Tag / Vary), and
+# POST /api/purge invalidates by tag through ctx.cache.purge().
+#
+# Wrangler 4.85.0's config-schema.json omits this hidden `cache` field, so
+# schema-aware editors may flag the block even though Wrangler accepts it.
 [cache]
 enabled = true
+
+# ---------------------------------------------------------------------------
+# Custom domain routing
+#
+# custom_domain = true tells Cloudflare to create and manage the DNS record and
+# TLS cert for this hostname automatically, rather than matching an existing
+# zone route pattern.
+#
+# It also places the worker inside the takazudomodular.com ZONE, which is what
+# this example wants: zone-scoped cache features (Cache Rules, Early Hints,
+# tiered cache, the zone's cache analytics and purge UI) apply to a custom
+# domain's zone, and a bare *.workers.dev host — having no zone — gets none of
+# them.
+#
+# Creating this route needs `Zone · Workers Routes · Edit` on the deploy token,
+# on top of the account-level Workers Scripts permission (see README).
+# ---------------------------------------------------------------------------
+[[routes]]
+pattern = "zfb-example-workers-cache.takazudomodular.com"
+custom_domain = true

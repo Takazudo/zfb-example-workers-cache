@@ -29,25 +29,57 @@ pnpm build
 pnpm exec wrangler deploy
 ```
 
-`wrangler.toml` uses Workers Static Assets:
+`wrangler.toml` uses Workers Static Assets, and serves production on a custom
+domain:
 
 ```toml
 main = "./dist/_worker.js"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
+workers_dev = true
+preview_urls = true
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
+run_worker_first = false
 
 [cache]
 enabled = true
+
+[[routes]]
+pattern = "zfb-example-workers-cache.takazudomodular.com"
+custom_domain = true
 ```
+
+Two ordering rules are load-bearing here:
+
+- `workers_dev` and `preview_urls` **must stay above `[assets]` and `[cache]`**.
+  In TOML any key after a table header belongs to that table, so a `workers_dev`
+  written below either one is parsed as an assets field — Wrangler warns
+  `Unexpected fields found in assets field` and silently ignores it.
+- `preview_urls` defaults to *match* `workers_dev`, so it is set explicitly.
+  Otherwise turning `workers_dev` off later would silently kill every per-deploy
+  preview URL too.
 
 The `2026-05-01` compatibility date is deliberate: Wrangler `4.85.0` accepts the
 Workers Cache config, but its local runtime rejected newer compatibility dates
 during verification.
+
+### Why the custom domain matters for this example
+
+`custom_domain = true` makes Cloudflare create and manage the DNS record and TLS
+certificate for the hostname. It also places the Worker inside the
+`takazudomodular.com` **zone**, which is the part that matters for a caching
+demo: zone-scoped cache features — Cache Rules, Early Hints, tiered cache, and
+the zone's own cache analytics and purge UI — apply to a custom domain's zone,
+and a bare `*.workers.dev` host has no zone, so it gets none of them.
+
+`workers_dev = true` is kept on deliberately, which makes the `*.workers.dev`
+host a useful control: the same routes, the same `Cache-Control` headers, but
+without a zone behind them.
 
 ## Routes
 
@@ -62,12 +94,16 @@ during verification.
   returns JSON with `Cache-Control: no-store`.
 - Non-cache dynamic responses in this example set `Cache-Control: no-store`.
 
-## Verify on workers.dev
+## Verify a deploy
+
+Production is <https://zfb-example-workers-cache.takazudomodular.com>. The same
+build is also reachable on `https://zfb-example-workers-cache.<subdomain>.workers.dev`
+— useful as the zoneless control described above.
 
 After deploy, request a cached page twice:
 
 ```sh
-WORKER_URL="https://zfb-example-workers-cache.<subdomain>.workers.dev"
+WORKER_URL="https://zfb-example-workers-cache.takazudomodular.com"
 
 curl -si "$WORKER_URL/products" | grep -i "cf-cache-status\\|cache-control"
 curl -si "$WORKER_URL/products" | grep -i "cf-cache-status\\|cache-control"
@@ -133,15 +169,54 @@ This repo ships `.github/workflows/deploy.yml`:
 
 - **build** runs on every push and PR — `pnpm install`, `pnpm typecheck`,
   `pnpm build`. It needs no Cloudflare credentials, so CI is green immediately.
-- **deploy** runs on push to `main` and calls `wrangler deploy`. It self-skips
-  until the secrets below are set, so a fresh repo never shows a red deploy.
+- **deploy** runs on push to `main` and calls `wrangler deploy`, publishing to
+  <https://zfb-example-workers-cache.takazudomodular.com>. It self-skips until
+  the secrets below are set, so a fresh repo never shows a red deploy.
+- **smoke** runs right after a real deploy — `pnpm smoke`, which checks the live
+  custom domain. See the next section.
 
 Add these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token with Account · Workers Scripts: Edit |
+| `CLOUDFLARE_API_TOKEN` | API token with Account · Workers Scripts: Edit **and** Zone · Workers Routes: Edit |
 | `CLOUDFLARE_ACCOUNT_ID` | target Cloudflare account id |
+
+### Post-deploy smoke test
+
+`wrangler deploy` succeeding proves the Worker uploaded — it says nothing about
+whether the custom domain resolves, whether its TLS certificate has been issued,
+or whether the site behind it is the right one. `scripts/smoke.mjs` is the only
+check that confirms that, so it runs after every real deploy. It also runs
+locally against any base URL:
+
+```sh
+pnpm smoke                                        # the production custom domain
+SMOKE_BASE_URL=http://localhost:4321 pnpm smoke   # against `pnpm preview`
+```
+
+It has three outcomes:
+
+- **skip** (green) — the hostname does not resolve, refuses connections, or has
+  no valid certificate yet. Provisioning a new custom domain is asynchronous, so
+  this is the expected state for the first deploy or two, and the repo never
+  shows a red deploy before Cloudflare is wired up.
+- **pass** — `/` returns 200 HTML containing this site's content marker, and
+  `/`, `/products`, and `/catalog` each return the `Cache-Control` (and, for
+  `/catalog`, the `Vary`) that the route sets in `pages/`.
+- **fail** — the hostname resolves but serves the wrong thing, or a route's cache
+  contract has drifted from its source.
+
+It deliberately asserts the **cache contract**, not a cache hit. A `HIT` is not
+reproducible on demand: the first request after a deploy always misses, and CI
+is answered by whichever edge PoP is closest to the runner, which may have its
+own cold cache. Requiring a `HIT` would make the deploy job flaky for reasons
+unrelated to correctness. The script still probes `/products` a few times and
+reports the `Cf-Cache-Status` sequence it saw as a notice — observed, never
+asserted.
+
+`POST /api/purge` is never exercised by the smoke test. It mutates cache state
+and is token-guarded; the smoke test issues read-only GETs.
 
 `PURGE_TOKEN` is a Worker secret set with `wrangler secret put`, not a GitHub secret.
 
@@ -153,8 +228,16 @@ these permissions:
 
 - **Workers Scripts** — Edit
 - **Account Settings** — Read
+- **Workers Routes** — Edit (Zone permission)
 
-Set **Account Resources → Include → (your account)**. No Zone permissions are
-needed — this repo deploys to a `*.workers.dev` host, not a custom domain. A
-single token can be shared across all `zfb-example-*` repos if it carries the
+Set **Account Resources → Include → (your account)** and **Zone Resources →
+Include → takazudomodular.com**.
+
+The Zone permission is required because of the `[[routes]]` block: creating and
+maintaining the `custom_domain` route is a zone-level operation. Without it,
+`wrangler deploy` uploads the Worker and then fails on the route step with an
+authentication error — the Worker is live on `*.workers.dev`, but the custom
+domain is never attached.
+
+A single token can be shared across all `zfb-example-*` repos if it carries the
 union of every repo's permissions.
