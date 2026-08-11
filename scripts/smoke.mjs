@@ -9,14 +9,28 @@
 // Three outcomes:
 //   SKIP (exit 0) — the domain is not wired up yet (no DNS, no cert, refused
 //                   connection). House rule: the repo never shows a red deploy
-//                   before Cloudflare is wired up.
+//                   before Cloudflare is wired up. Retired by SMOKE_REQUIRE_LIVE.
 //   PASS (exit 0) — the domain serves this site with the expected cache contract.
-//   FAIL (exit 1) — the domain resolves but the site is wrong or broken.
+//   FAIL (exit 1) — the domain resolves but the site is wrong or broken; or an
+//                   already-issued cert expired; or the host is unreachable
+//                   while SMOKE_REQUIRE_LIVE is set.
+//
+// Target override, in precedence order: argv[2], SMOKE_BASE_URL, the real domain.
+//
+// SMOKE_REQUIRE_LIVE=1 turns every SKIP into a FAIL. Set it once the domain is
+// confirmed live — from then on "not serving yet" is an outage, not a
+// provisioning window. It governs ONLY the domain-not-ready skip. The cache
+// HIT/MISS nondeterminism tolerance is a separate concern and stays non-fatal in
+// both modes; see observeCacheBehavior().
 //
 // Read-only GETs only. POST /api/purge is a mutating, token-guarded admin
 // endpoint and is deliberately never exercised here.
 
-const BASE_URL = (process.env.SMOKE_BASE_URL ?? "https://zfb-example-workers-cache.takazudomodular.com").replace(/\/+$/, "");
+// argv[2] is what makes the skip/fail matrix testable by hand against known-bad
+// endpoints (an expired cert, a hostname that does not resolve, …).
+const BASE_URL = (process.argv[2] ?? process.env.SMOKE_BASE_URL ?? "https://zfb-example-workers-cache.takazudomodular.com").replace(/\/+$/, "");
+
+const REQUIRE_LIVE = /^(1|true)$/i.test((process.env.SMOKE_REQUIRE_LIVE ?? "").trim());
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const PROBE_ATTEMPTS = 3;
@@ -50,8 +64,21 @@ function annotate(level, message) {
   console.log(`::${level}::${escaped}`);
 }
 
+/**
+ * The single funnel for "the domain is not serving yet" — every skip in this
+ * script goes through here, which is what makes SMOKE_REQUIRE_LIVE a one-line
+ * switch rather than a flag threaded through each check.
+ */
 function skip(reason) {
-  annotate("notice", `Smoke test skipped — ${BASE_URL} is not serving yet.\n${reason}\nThis is expected until the custom-domain route, DNS record, and edge TLS cert finish provisioning (and until the deploy token carries Zone · Workers Routes · Edit).`);
+  if (REQUIRE_LIVE) {
+    annotate(
+      "error",
+      `${BASE_URL} did not respond, and SMOKE_REQUIRE_LIVE is set.\n${reason}\nThis domain is known to be live, so an unreachable host is an outage — not a provisioning window.`,
+    );
+    console.error(`\nSmoke test FAILED — ${BASE_URL} is unreachable.`);
+    process.exit(1);
+  }
+  annotate("notice", `Smoke test skipped — ${BASE_URL} is not serving yet.\n${reason}\nThis is expected until the custom-domain route, DNS record, and edge TLS cert finish provisioning (and until the deploy token carries Zone · Workers Routes · Edit). Set SMOKE_REQUIRE_LIVE=1 once the domain is live to turn this into a failure.`);
   process.exit(0);
 }
 
@@ -92,12 +119,25 @@ function errorCodes(error) {
 }
 
 /**
+ * Cert failures that can only mean an ALREADY-ISSUED cert stopped being
+ * trustworthy. Cloudflare issues the edge cert as part of provisioning a custom
+ * domain, so on the way up it is always freshly minted — it cannot be expired or
+ * revoked. Seeing one of these therefore means an established domain broke,
+ * which is a failure even with the skip path enabled.
+ *
+ * These need an explicit escape hatch because the broad TLS matching below would
+ * otherwise swallow them: "CERT_HAS_EXPIRED".includes("CERT") is true.
+ */
+const BROKEN_CERT_CODES = new Set(["CERT_HAS_EXPIRED", "CERT_REVOKED"]);
+
+/**
  * "Not wired up yet" vs "wired up but broken". Only the former may skip, so this
  * matches on transport-layer failures — no DNS record, no TLS cert, nothing
  * listening. Anything that completes an HTTPS exchange is judged on its merits.
  */
 function isNotWiredUpYet(error) {
   const codes = errorCodes(error);
+  if (codes.some((code) => BROKEN_CERT_CODES.has(code))) return false;
   return codes.some(
     (code) =>
       // DNS: the custom-domain record does not exist yet
@@ -232,6 +272,13 @@ async function checkRoute(contract) {
  * cache. Requiring a HIT here would make the deploy job flaky for reasons that
  * say nothing about whether the code is correct — so this observes and reports,
  * and the assertions above carry the actual pass/fail weight.
+ *
+ * SMOKE_REQUIRE_LIVE does NOT tighten this, deliberately. That flag answers "is
+ * the domain up?", which is now a settled yes/no. Cache HIT/MISS answers "which
+ * PoP took this request and how warm was it?", which stays genuinely
+ * nondeterministic no matter how live the domain is. Making the flag also demand
+ * a HIT would reintroduce exactly the flake this function exists to remove, so
+ * the two concerns stay separate.
  */
 async function observeCacheBehavior() {
   const statuses = [];
