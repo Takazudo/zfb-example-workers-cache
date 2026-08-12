@@ -1,8 +1,11 @@
 # Cloudflare Workers (static assets) deploy for this zfb example.
 #
 #   build  — always runs (push + PR): install, typecheck (`zfb check`), build
-#            (`zfb build`). This is the L3 build-output gate; it needs no
+#            (`zfb build`), then assert the response-header contract against a
+#            local `pnpm preview`. This is the L3 build-output gate; it needs no
 #            Cloudflare credentials, so a fresh clone/fork is green immediately.
+#            The preview run is also the ONLY place `Cache-Tag` can be checked —
+#            the edge strips it, so the post-deploy smoke below cannot see it.
 #   deploy — push to `main` only: runs `wrangler deploy`, but SELF-SKIPS when
 #              * secrets.CLOUDFLARE_API_TOKEN is unset, or
 #              * wrangler.toml still holds a REPLACE_WITH_* placeholder id.
@@ -60,6 +63,28 @@ jobs:
         run: pnpm typecheck
       - name: Build
         run: pnpm build
+
+      # The header contract (Cache-Control, Vary, Cache-Tag) asserted against a
+      # local preview. This is the only place Cache-Tag CAN be asserted — the
+      # Cloudflare edge consumes and strips it, so the post-deploy run below can
+      # never see it. Runs on PRs too, and needs no Cloudflare credentials, so a
+      # fork gets the same gate.
+      - name: Assert the header contract against a local preview
+        timeout-minutes: 5
+        env:
+          # Without this, a preview that failed to start exits 0 as a SKIP — the
+          # same silent-pass this step exists to prevent.
+          SMOKE_REQUIRE_LIVE: "1"
+          # Fail if the Cache-Tag assertion did not actually run.
+          SMOKE_ASSERT_CACHE_TAG: "1"
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          pnpm preview &
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:4321/ && break
+            sleep 1
+          done
+          SMOKE_BASE_URL=http://localhost:4321 pnpm smoke
 
   deploy:
     name: Deploy to Cloudflare Workers

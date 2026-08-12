@@ -118,6 +118,13 @@ curl -si "$WORKER_URL/products" | grep -i "cf-cache-status\\|cache-control"
 The first response should be `Cf-Cache-Status: MISS` and the second `HIT`, with
 the render timestamp in the HTML unchanged on the hit.
 
+Do not expect to see `Cache-Tag` in any of these responses. Cloudflare consumes
+it and strips it before the response reaches you — its absence here is correct,
+not a broken route. To confirm the routes really do set it, run the smoke test
+against a local preview, which reaches the Worker directly:
+`SMOKE_BASE_URL=http://localhost:4321 SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke`
+(CI's `build` job does exactly this on every push and PR).
+
 Header variants — each `X-Catalog-Market` value gets its own cached entry
 because `/catalog` sets `Vary: X-Catalog-Market`:
 
