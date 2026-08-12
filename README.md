@@ -168,12 +168,14 @@ For an ordered from-zero walkthrough of the steps below, see
 This repo ships `.github/workflows/deploy.yml`:
 
 - **build** runs on every push and PR — `pnpm install`, `pnpm typecheck`,
-  `pnpm build`. It needs no Cloudflare credentials, so CI is green immediately.
+  `pnpm build`, then `pnpm smoke` against a local `pnpm preview` to assert the
+  response-header contract. It needs no Cloudflare credentials, so CI is green
+  immediately and forks get the same gate.
 - **deploy** runs on push to `main` and calls `wrangler deploy`, publishing to
   <https://zfb-example-workers-cache.takazudomodular.com>. It self-skips until
   the secrets below are set, so a fresh repo never shows a red deploy.
-- **smoke** runs right after a real deploy — `pnpm smoke`, which checks the live
-  custom domain. See the next section.
+- **post-deploy smoke** is a final step of the **deploy** job — `pnpm smoke`
+  against the live custom domain. See the next section.
 
 Add these under **Settings → Secrets and variables → Actions**:
 
@@ -182,13 +184,20 @@ Add these under **Settings → Secrets and variables → Actions**:
 | `CLOUDFLARE_API_TOKEN` | API token with Account · Workers Scripts: Edit **and** Zone · Workers Routes: Edit |
 | `CLOUDFLARE_ACCOUNT_ID` | target Cloudflare account id |
 
-### Post-deploy smoke test
+### The smoke test
 
-`wrangler deploy` succeeding proves the Worker uploaded — it says nothing about
-whether the custom domain resolves, whether its TLS certificate has been issued,
-or whether the site behind it is the right one. `scripts/smoke.mjs` is the only
-check that confirms that, so it runs after every real deploy. It also runs
-locally against any base URL:
+`scripts/smoke.mjs` runs in two places, for two different reasons.
+
+**After a deploy**, against the live custom domain: `wrangler deploy` succeeding
+proves the Worker uploaded — it says nothing about whether the custom domain
+resolves, whether its TLS certificate has been issued, or whether the site behind
+it is the right one. This is the only check that confirms that.
+
+**Before a deploy**, on every push and PR, against a local `pnpm preview`: this
+gates the header contract without Cloudflare credentials, and it is the only run
+that can assert `Cache-Tag` (see below).
+
+It runs against any base URL:
 
 ```sh
 pnpm smoke                                        # the production custom domain
@@ -203,7 +212,8 @@ It has three outcomes:
   shows a red deploy before Cloudflare is wired up.
 - **pass** — `/` returns 200 HTML containing this site's content marker, and
   `/`, `/products`, and `/catalog` each return the `Cache-Control` (and, for
-  `/catalog`, the `Vary`) that the route sets in `pages/`.
+  `/catalog`, the `Vary`) that the route sets in `pages/` — plus, off the edge,
+  the `Cache-Tag`.
 - **fail** — the hostname resolves but serves the wrong thing, or a route's cache
   contract has drifted from its source.
 
@@ -219,6 +229,27 @@ asserted.
 and is token-guarded; the smoke test issues read-only GETs.
 
 `PURGE_TOKEN` is a Worker secret set with `wrangler secret put`, not a GitHub secret.
+
+#### `Cache-Tag` is asserted only off the edge
+
+Cloudflare **consumes** `Cache-Tag`: it is a cache-control-plane header, stripped
+before the response reaches the client. So `curl` against the live domain never
+shows it, and no post-deploy check can assert it. It *is* present when the Worker
+is reached directly, which is why CI asserts it from the `build` job's local
+preview. Reproduce that run with:
+
+```sh
+pnpm build
+pnpm preview                                          # in one shell
+SMOKE_BASE_URL=http://localhost:4321 \
+  SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke                 # in another
+```
+
+`SMOKE_ASSERT_CACHE_TAG=1` fails the run unless every tagged route was actually
+asserted — without it, pointing the smoke test at any edge-fronted URL would
+silently degrade to zero coverage for the one header this recipe is about.
+Against the live domain the check is skipped with a notice, and the run (without
+that flag) still passes.
 
 ### Cloudflare API token permissions
 

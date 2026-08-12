@@ -1,5 +1,12 @@
 #!/usr/bin/env node
-// Post-deploy smoke test for the live custom domain.
+// Header-contract check for this site, in two roles:
+//
+//   post-deploy — run against the live custom domain, it confirms the domain is
+//                 attached and serving this site with the expected cache headers.
+//   pre-deploy  — run against `pnpm preview` (SMOKE_BASE_URL), it gates the same
+//                 contract on every push and PR without Cloudflare credentials,
+//                 and is the only place `Cache-Tag` can be asserted at all (the
+//                 edge strips it — see ROUTE_CONTRACT).
 //
 // A deploy can succeed while the site is still unreachable — the custom-domain
 // route, its DNS record, and its edge TLS cert are provisioned by Cloudflare
@@ -23,6 +30,10 @@
 // HIT/MISS nondeterminism tolerance is a separate concern and stays non-fatal in
 // both modes; see observeCacheBehavior().
 //
+// SMOKE_ASSERT_CACHE_TAG=1 fails the run if no Cache-Tag assertion executed —
+// i.e. it demands an off-edge target. Set it wherever the Cache-Tag check is the
+// point of the run (CI's build job); see ASSERT_CACHE_TAG.
+//
 // Read-only GETs only. POST /api/purge is a mutating, token-guarded admin
 // endpoint and is deliberately never exercised here.
 
@@ -44,19 +55,50 @@ const CONTENT_MARKER = "A compact zfb recipe for response-header driven caching.
 // `cacheControl` prop each page passes, and the Worker sets them on EVERY
 // response regardless of edge cache state — which is exactly why they are safe
 // to assert on. See the "why not assert a HIT" note further down.
+//
+// `cacheTag` is the exception, and the reason this script cares whether it is
+// talking to the edge: Cloudflare CONSUMES `Cache-Tag`. It is a cache-control-plane
+// header, stripped before the response reaches the client, so it is unassertable
+// against production no matter how the request is made. It IS present when the
+// Worker is reached directly (`pnpm preview`), so the assertion runs off-edge only
+// — which is why CI's build job smoke-tests a local preview. See checkCacheTag().
 const ROUTE_CONTRACT = [
-  { path: "/", directives: { "no-store": true } },
-  { path: "/products", directives: { public: true, "max-age": "60", "stale-while-revalidate": "600" } },
+  { path: "/", directives: { "no-store": true }, cacheTag: null },
+  { path: "/products", directives: { public: true, "max-age": "60", "stale-while-revalidate": "600" }, cacheTag: "products" },
   {
     path: "/catalog",
     directives: { public: true, "max-age": "45", "stale-while-revalidate": "300" },
     // Each X-Catalog-Market value gets its own cached variant.
     varyIncludes: "x-catalog-market",
+    cacheTag: "products,catalog-market",
   },
 ];
 
+// Set it and the run fails unless every tagged route was actually asserted.
+// Without it, pointing the run at ANY edge-fronted target — production, a
+// workers.dev URL, a version-preview URL, a tunnel, `wrangler dev --remote` —
+// silently degrades to zero coverage, which is the same "green CI proves nothing"
+// failure this check exists to remove.
+const ASSERT_CACHE_TAG = /^(1|true)$/i.test((process.env.SMOKE_ASSERT_CACHE_TAG ?? "").trim());
+
 const failures = [];
 const notes = [];
+
+// Counted separately: only a route that declares a tag proves the header survived.
+// The "/ carries none" check is worth asserting but must not, on its own, satisfy
+// SMOKE_ASSERT_CACHE_TAG — that flag is a promise about the tagged routes.
+let taggedRouteAssertions = 0;
+let cacheTagRoutesSkipped = 0;
+
+/**
+ * Every Cloudflare-proxied response carries cf-ray, including Cloudflare's own
+ * error pages; a direct hit on the Worker (`pnpm preview`) carries none. Needs no
+ * extra request and does not depend on the hostname, so switching between
+ * workers.dev and a custom domain cannot break the detection.
+ */
+function servedByEdge(response) {
+  return response.headers.has("cf-ray");
+}
 
 function annotate(level, message) {
   // GitHub Actions workflow commands are single-line; %0A is the newline escape.
@@ -64,17 +106,28 @@ function annotate(level, message) {
   console.log(`::${level}::${escaped}`);
 }
 
+function isLocalTarget(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The single funnel for "the domain is not serving yet" — every skip in this
+ * The single funnel for "the target is not serving yet" — every skip in this
  * script goes through here, which is what makes SMOKE_REQUIRE_LIVE a one-line
  * switch rather than a flag threaded through each check.
  */
 function skip(reason) {
   if (REQUIRE_LIVE) {
-    annotate(
-      "error",
-      `${BASE_URL} did not respond, and SMOKE_REQUIRE_LIVE is set.\n${reason}\nThis domain is known to be live, so an unreachable host is an outage — not a provisioning window.`,
-    );
+    // A local target is never a provisioning story — pointing the reader at DNS and
+    // TLS for a preview that failed to boot sends them down the wrong trail.
+    const diagnosis = isLocalTarget(BASE_URL)
+      ? `The preview server at ${BASE_URL} never came up — check the \`pnpm preview\` output.`
+      : "This domain is known to be live, so an unreachable host is an outage — not a provisioning window.";
+    annotate("error", `${BASE_URL} did not respond, and SMOKE_REQUIRE_LIVE is set.\n${reason}\n${diagnosis}`);
     console.error(`\nSmoke test FAILED — ${BASE_URL} is unreachable.`);
     process.exit(1);
   }
@@ -205,7 +258,56 @@ async function probeReachable() {
   skip(`${errorCodes(lastError).join(" / ") || lastError?.message} after ${PROBE_ATTEMPTS} attempts.`);
 }
 
-function checkCacheContract(path, response, { directives, varyIncludes }) {
+/** `products, catalog-market` -> ["products", "catalog-market"] */
+function parseTagList(value) {
+  return (value ?? "")
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Order- and whitespace-insensitive, and it names the offending tag rather than
+ * dumping both strings — `products, catalog-market` must not read as a regression
+ * against `products,catalog-market`.
+ *
+ * Off-edge only (see the ROUTE_CONTRACT note): on the edge the header is gone by
+ * design, so asserting it there would fail on every correct deploy.
+ */
+function checkCacheTag(path, response, expected) {
+  if (servedByEdge(response)) {
+    if (expected !== null) cacheTagRoutesSkipped += 1;
+    return;
+  }
+
+  const raw = response.headers.get("cache-tag");
+
+  if (expected === null) {
+    check(!raw, `GET ${path} sent Cache-Tag "${raw}" but is uncacheable (no-store) and must carry none`);
+    return;
+  }
+
+  const want = parseTagList(expected);
+  const got = parseTagList(raw);
+  const missing = want.filter((tag) => !got.includes(tag));
+  const unexpected = got.filter((tag) => !want.includes(tag));
+
+  if (missing.length > 0 || unexpected.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing ${missing.map((t) => `"${t}"`).join(", ")}` : "",
+      unexpected.length > 0 ? `unexpected ${unexpected.map((t) => `"${t}"`).join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    check(false, `GET ${path} cache-tag ${detail} (got: ${raw ?? "(none)"}, want: ${expected})`);
+  }
+
+  taggedRouteAssertions += 1;
+}
+
+// No default for `cacheTag` on purpose: every ROUTE_CONTRACT row must state its
+// intent, and a future row that forgets fails loudly rather than skipping silently.
+function checkCacheContract(path, response, { directives, varyIncludes, cacheTag }) {
   const raw = response.headers.get("cache-control");
   const actual = parseCacheControl(raw);
   for (const [name, expected] of Object.entries(directives)) {
@@ -221,10 +323,17 @@ function checkCacheContract(path, response, { directives, varyIncludes }) {
     check(vary.includes(varyIncludes), `GET ${path} vary did not include "${varyIncludes}" (got: ${response.headers.get("vary")})`);
   }
 
-  console.log(`  GET ${path.padEnd(10)} ${response.status}  cache-control: ${raw}${varyIncludes ? `  vary: ${response.headers.get("vary")}` : ""}`);
+  checkCacheTag(path, response, cacheTag);
+
+  const observedTag = servedByEdge(response) ? "" : `  cache-tag: ${response.headers.get("cache-tag") ?? "(none)"}`;
+  console.log(`  GET ${path.padEnd(10)} ${response.status}  cache-control: ${raw}${varyIncludes ? `  vary: ${response.headers.get("vary")}` : ""}${observedTag}`);
 }
 
-/** Reuses the probe's response — this is the request that proves the domain is attached at all. */
+/**
+ * Reuses the probe's response — this is the request that proves the domain is
+ * attached at all. Returns it so the caller can read transport-level facts off it
+ * (whether the edge answered) without spending another request.
+ */
 async function checkRootPage(contract) {
   let response;
   try {
@@ -233,10 +342,10 @@ async function checkRootPage(contract) {
     // probeReachable() re-throws anything it would not skip on, i.e. a failure
     // that is not "the domain isn't wired up yet". That is a genuine failure.
     failures.push(`GET / failed with a non-transport error: ${errorCodes(error).join(" / ") || error.message}`);
-    return;
+    return null;
   }
 
-  if (!check(response.status === 200, `GET / returned ${response.status}, expected 200`)) return;
+  if (!check(response.status === 200, `GET / returned ${response.status}, expected 200`)) return response;
 
   const contentType = response.headers.get("content-type") ?? "";
   check(contentType.includes("text/html"), `GET / content-type was "${contentType}", expected text/html`);
@@ -248,6 +357,7 @@ async function checkRootPage(contract) {
   );
 
   checkCacheContract("/", response, contract);
+  return response;
 }
 
 async function checkRoute(contract) {
@@ -280,7 +390,15 @@ async function checkRoute(contract) {
  * a HIT would reintroduce exactly the flake this function exists to remove, so
  * the two concerns stay separate.
  */
-async function observeCacheBehavior() {
+async function observeCacheBehavior(rootResponse) {
+  // Off-edge there is no Cache API at all (wrangler dev does not simulate it), so
+  // this would spend four requests to conclude "no HIT" every single time — a
+  // guaranteed-misleading notice on the local-preview run.
+  if (!servedByEdge(rootResponse)) {
+    notes.push("Cache HIT/MISS not observed — this target is not behind the Cloudflare edge, and wrangler does not simulate the Cache API. The header contract asserted above is what this run gates on.");
+    return;
+  }
+
   const statuses = [];
   const renderedAt = [];
 
@@ -320,12 +438,25 @@ async function main() {
 
   const [rootContract, ...routeContracts] = ROUTE_CONTRACT;
 
-  await checkRootPage(rootContract);
+  const rootResponse = await checkRootPage(rootContract);
   // The remaining checks only mean anything once we know the domain serves this
   // site at all — a wrong-site root makes every downstream failure noise.
   if (failures.length === 0) {
     for (const contract of routeContracts) await checkRoute(contract);
-    await observeCacheBehavior();
+    if (rootResponse) await observeCacheBehavior(rootResponse);
+  }
+
+  // One aggregate note, not one per tagged route — on the edge every tagged route
+  // skips, and repeating the same explanation per route is noise.
+  if (cacheTagRoutesSkipped > 0) {
+    notes.push(`Cache-Tag not asserted on ${cacheTagRoutesSkipped} route(s): Cloudflare consumes Cache-Tag and strips it before the response reaches the client, so it cannot be checked against a live edge. CI's build job asserts it against a local preview instead — reproduce with: SMOKE_BASE_URL=http://localhost:4321 SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke`);
+  }
+
+  // Both halves are needed. "Nothing asserted" catches a fully edge-fronted target;
+  // "something skipped" catches the mixed case — a proxy in front of some routes but
+  // not others — where the remaining assertions would otherwise report full coverage.
+  if (ASSERT_CACHE_TAG && (taggedRouteAssertions === 0 || cacheTagRoutesSkipped > 0)) {
+    failures.push(`SMOKE_ASSERT_CACHE_TAG is set, but ${taggedRouteAssertions} tagged route(s) were asserted and ${cacheTagRoutesSkipped} skipped — every tagged route must be asserted. A skipped route sits behind the Cloudflare edge, which strips the header. Point the smoke test at a local preview (SMOKE_BASE_URL=http://localhost:4321) or unset the flag.`);
   }
 
   for (const note of notes) annotate("notice", note);
