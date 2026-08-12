@@ -7,6 +7,8 @@ worker/
 .zfb-build/
 .wrangler/
 .dev.vars
+# captured `pnpm preview` output from the CI header-contract step
+preview.log
 # zfb temp file stranded on abnormal termination — Takazudo/zudo-front-builder#821
 zfb-tailwind-entry-*.css
 .DS_Store

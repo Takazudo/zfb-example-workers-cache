@@ -121,7 +121,8 @@ the render timestamp in the HTML unchanged on the hit.
 Do not expect to see `Cache-Tag` in any of these responses. Cloudflare consumes
 it and strips it before the response reaches you — its absence here is correct,
 not a broken route. To confirm the routes really do set it, run the smoke test
-against a local preview, which reaches the Worker directly:
+against a local preview, which reaches the Worker directly — with `pnpm preview`
+running in another shell:
 `SMOKE_BASE_URL=http://localhost:4321 SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke`
 (CI's `build` job does exactly this on every push and PR).
 

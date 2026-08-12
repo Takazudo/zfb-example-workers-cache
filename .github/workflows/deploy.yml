@@ -44,7 +44,7 @@ permissions:
 
 jobs:
   build:
-    name: Build (typecheck + zfb build)
+    name: Build (typecheck + build + header contract)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -75,16 +75,39 @@ jobs:
           # Without this, a preview that failed to start exits 0 as a SKIP — the
           # same silent-pass this step exists to prevent.
           SMOKE_REQUIRE_LIVE: "1"
-          # Fail if the Cache-Tag assertion did not actually run.
+          # Fail unless every tagged route was really asserted.
           SMOKE_ASSERT_CACHE_TAG: "1"
+          # Suppress wrangler's first-run telemetry prompt on a fresh runner.
           WRANGLER_SEND_METRICS: "false"
         run: |
-          pnpm preview &
+          # Redirect and reap the preview deliberately. Left on the step's stdout it
+          # interleaves with the smoke output, and a live background child holding
+          # that pipe open can keep the step running until timeout-minutes kills it —
+          # a red build on a green check.
+          #
+          # setsid + `kill -- -PID` because `pnpm preview` is a wrapper: signalling it
+          # alone leaves the real `wrangler dev` and its `workerd` children running
+          # (verified locally). Its own process group is what makes them reapable.
+          setsid pnpm preview > preview.log 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill -- -"$PREVIEW_PID" 2>/dev/null || true' EXIT
+
+          ready=""
           for _ in $(seq 1 30); do
-            curl -sf -o /dev/null http://localhost:4321/ && break
+            if curl -sf -o /dev/null http://localhost:4321/; then ready=1; break; fi
+            # Distinguish "still booting" from "died on startup" — otherwise a crash
+            # burns the full wait and then reports as an unreachable host.
+            if ! kill -0 "$PREVIEW_PID" 2>/dev/null; then break; fi
             sleep 1
           done
-          SMOKE_BASE_URL=http://localhost:4321 pnpm smoke
+
+          if [ -z "$ready" ]; then
+            echo "::error::the local preview never came up"
+            cat preview.log
+            exit 1
+          fi
+
+          SMOKE_BASE_URL=http://localhost:4321 pnpm smoke || { cat preview.log; exit 1; }
 
   deploy:
     name: Deploy to Cloudflare Workers

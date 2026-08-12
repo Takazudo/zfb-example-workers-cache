@@ -174,8 +174,8 @@ This repo ships `.github/workflows/deploy.yml`:
 - **deploy** runs on push to `main` and calls `wrangler deploy`, publishing to
   <https://zfb-example-workers-cache.takazudomodular.com>. It self-skips until
   the secrets below are set, so a fresh repo never shows a red deploy.
-- **smoke** runs right after a real deploy — `pnpm smoke`, which checks the live
-  custom domain. See the next section.
+- **post-deploy smoke** is a final step of the **deploy** job — `pnpm smoke`
+  against the live custom domain. See the next section.
 
 Add these under **Settings → Secrets and variables → Actions**:
 
@@ -212,9 +212,23 @@ It has three outcomes:
   shows a red deploy before Cloudflare is wired up.
 - **pass** — `/` returns 200 HTML containing this site's content marker, and
   `/`, `/products`, and `/catalog` each return the `Cache-Control` (and, for
-  `/catalog`, the `Vary`) that the route sets in `pages/`.
+  `/catalog`, the `Vary`) that the route sets in `pages/` — plus, off the edge,
+  the `Cache-Tag`.
 - **fail** — the hostname resolves but serves the wrong thing, or a route's cache
   contract has drifted from its source.
+
+It deliberately asserts the **cache contract**, not a cache hit. A `HIT` is not
+reproducible on demand: the first request after a deploy always misses, and CI
+is answered by whichever edge PoP is closest to the runner, which may have its
+own cold cache. Requiring a `HIT` would make the deploy job flaky for reasons
+unrelated to correctness. The script still probes `/products` a few times and
+reports the `Cf-Cache-Status` sequence it saw as a notice — observed, never
+asserted.
+
+`POST /api/purge` is never exercised by the smoke test. It mutates cache state
+and is token-guarded; the smoke test issues read-only GETs.
+
+`PURGE_TOKEN` is a Worker secret set with `wrangler secret put`, not a GitHub secret.
 
 #### `Cache-Tag` is asserted only off the edge
 
@@ -231,23 +245,11 @@ SMOKE_BASE_URL=http://localhost:4321 \
   SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke                 # in another
 ```
 
-`SMOKE_ASSERT_CACHE_TAG=1` fails the run if no `Cache-Tag` assertion executed —
-without it, pointing the smoke test at any edge-fronted URL would silently
-degrade to zero coverage for the one header this recipe is about. Against the
-live domain the check is skipped with a notice, and the run still passes.
-
-It deliberately asserts the **cache contract**, not a cache hit. A `HIT` is not
-reproducible on demand: the first request after a deploy always misses, and CI
-is answered by whichever edge PoP is closest to the runner, which may have its
-own cold cache. Requiring a `HIT` would make the deploy job flaky for reasons
-unrelated to correctness. The script still probes `/products` a few times and
-reports the `Cf-Cache-Status` sequence it saw as a notice — observed, never
-asserted.
-
-`POST /api/purge` is never exercised by the smoke test. It mutates cache state
-and is token-guarded; the smoke test issues read-only GETs.
-
-`PURGE_TOKEN` is a Worker secret set with `wrangler secret put`, not a GitHub secret.
+`SMOKE_ASSERT_CACHE_TAG=1` fails the run unless every tagged route was actually
+asserted — without it, pointing the smoke test at any edge-fronted URL would
+silently degrade to zero coverage for the one header this recipe is about.
+Against the live domain the check is skipped with a notice, and the run (without
+that flag) still passes.
 
 ### Cloudflare API token permissions
 

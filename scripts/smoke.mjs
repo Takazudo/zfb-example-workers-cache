@@ -74,18 +74,21 @@ const ROUTE_CONTRACT = [
   },
 ];
 
-// Set it and the run fails if no cache-tag assertion actually executed. Without
-// this, a target that carries cf-ray but is not the production edge (wrangler dev
-// --remote, a workers.dev URL, a version-preview URL, a tunnel) silently degrades
-// to zero coverage — the same "green CI proves nothing" failure this check exists
-// to remove.
+// Set it and the run fails unless every tagged route was actually asserted.
+// Without it, pointing the run at ANY edge-fronted target — production, a
+// workers.dev URL, a version-preview URL, a tunnel, `wrangler dev --remote` —
+// silently degrades to zero coverage, which is the same "green CI proves nothing"
+// failure this check exists to remove.
 const ASSERT_CACHE_TAG = /^(1|true)$/i.test((process.env.SMOKE_ASSERT_CACHE_TAG ?? "").trim());
 
 const failures = [];
 const notes = [];
 
-let cacheTagAssertions = 0;
-let cacheTagSkippedOnEdge = 0;
+// Counted separately: only a route that declares a tag proves the header survived.
+// The "/ carries none" check is worth asserting but must not, on its own, satisfy
+// SMOKE_ASSERT_CACHE_TAG — that flag is a promise about the tagged routes.
+let taggedRouteAssertions = 0;
+let cacheTagRoutesSkipped = 0;
 
 /**
  * Every Cloudflare-proxied response carries cf-ray, including Cloudflare's own
@@ -103,17 +106,28 @@ function annotate(level, message) {
   console.log(`::${level}::${escaped}`);
 }
 
+function isLocalTarget(url) {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The single funnel for "the domain is not serving yet" — every skip in this
+ * The single funnel for "the target is not serving yet" — every skip in this
  * script goes through here, which is what makes SMOKE_REQUIRE_LIVE a one-line
  * switch rather than a flag threaded through each check.
  */
 function skip(reason) {
   if (REQUIRE_LIVE) {
-    annotate(
-      "error",
-      `${BASE_URL} did not respond, and SMOKE_REQUIRE_LIVE is set.\n${reason}\nThis domain is known to be live, so an unreachable host is an outage — not a provisioning window.`,
-    );
+    // A local target is never a provisioning story — pointing the reader at DNS and
+    // TLS for a preview that failed to boot sends them down the wrong trail.
+    const diagnosis = isLocalTarget(BASE_URL)
+      ? `The preview server at ${BASE_URL} never came up — check the \`pnpm preview\` output.`
+      : "This domain is known to be live, so an unreachable host is an outage — not a provisioning window.";
+    annotate("error", `${BASE_URL} did not respond, and SMOKE_REQUIRE_LIVE is set.\n${reason}\n${diagnosis}`);
     console.error(`\nSmoke test FAILED — ${BASE_URL} is unreachable.`);
     process.exit(1);
   }
@@ -262,7 +276,7 @@ function parseTagList(value) {
  */
 function checkCacheTag(path, response, expected) {
   if (servedByEdge(response)) {
-    if (expected !== null) cacheTagSkippedOnEdge += 1;
+    if (expected !== null) cacheTagRoutesSkipped += 1;
     return;
   }
 
@@ -270,7 +284,6 @@ function checkCacheTag(path, response, expected) {
 
   if (expected === null) {
     check(!raw, `GET ${path} sent Cache-Tag "${raw}" but is uncacheable (no-store) and must carry none`);
-    cacheTagAssertions += 1;
     return;
   }
 
@@ -289,10 +302,12 @@ function checkCacheTag(path, response, expected) {
     check(false, `GET ${path} cache-tag ${detail} (got: ${raw ?? "(none)"}, want: ${expected})`);
   }
 
-  cacheTagAssertions += 1;
+  taggedRouteAssertions += 1;
 }
 
-function checkCacheContract(path, response, { directives, varyIncludes, cacheTag = null }) {
+// No default for `cacheTag` on purpose: every ROUTE_CONTRACT row must state its
+// intent, and a future row that forgets fails loudly rather than skipping silently.
+function checkCacheContract(path, response, { directives, varyIncludes, cacheTag }) {
   const raw = response.headers.get("cache-control");
   const actual = parseCacheControl(raw);
   for (const [name, expected] of Object.entries(directives)) {
@@ -432,13 +447,16 @@ async function main() {
   }
 
   // One aggregate note, not one per tagged route — on the edge every tagged route
-  // skips, and three copies of the same explanation is noise.
-  if (cacheTagSkippedOnEdge > 0) {
-    notes.push(`Cache-Tag not asserted on ${cacheTagSkippedOnEdge} route(s): Cloudflare consumes Cache-Tag and strips it before the response reaches the client, so it cannot be checked against a live edge. CI's build job asserts it against a local preview instead — reproduce with: SMOKE_BASE_URL=http://localhost:4321 SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke`);
+  // skips, and repeating the same explanation per route is noise.
+  if (cacheTagRoutesSkipped > 0) {
+    notes.push(`Cache-Tag not asserted on ${cacheTagRoutesSkipped} route(s): Cloudflare consumes Cache-Tag and strips it before the response reaches the client, so it cannot be checked against a live edge. CI's build job asserts it against a local preview instead — reproduce with: SMOKE_BASE_URL=http://localhost:4321 SMOKE_ASSERT_CACHE_TAG=1 pnpm smoke`);
   }
 
-  if (ASSERT_CACHE_TAG && cacheTagAssertions === 0) {
-    failures.push("SMOKE_ASSERT_CACHE_TAG is set but no cache-tag assertion ran — this target sits behind the Cloudflare edge, which strips the header. Point the smoke test at a local preview (SMOKE_BASE_URL=http://localhost:4321) or unset the flag.");
+  // Both halves are needed. "Nothing asserted" catches a fully edge-fronted target;
+  // "something skipped" catches the mixed case — a proxy in front of some routes but
+  // not others — where the remaining assertions would otherwise report full coverage.
+  if (ASSERT_CACHE_TAG && (taggedRouteAssertions === 0 || cacheTagRoutesSkipped > 0)) {
+    failures.push(`SMOKE_ASSERT_CACHE_TAG is set, but ${taggedRouteAssertions} tagged route(s) were asserted and ${cacheTagRoutesSkipped} skipped — every tagged route must be asserted. A skipped route sits behind the Cloudflare edge, which strips the header. Point the smoke test at a local preview (SMOKE_BASE_URL=http://localhost:4321) or unset the flag.`);
   }
 
   for (const note of notes) annotate("notice", note);
