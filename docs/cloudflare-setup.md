@@ -1,9 +1,11 @@
 # Cloudflare setup
 
-An ordered walkthrough from zero to a deployed Worker. **This repo is not
-deployed yet**: no Cloudflare secrets are set, and the `deploy` job in
-`.github/workflows/deploy.yml` self-skips until `CLOUDFLARE_API_TOKEN` exists.
-Nothing here has been done for you — start at step 1.
+An ordered walkthrough from zero to a deployed Worker. This repository's
+production configuration serves the custom domain
+`zfb-example-workers-cache.takazudomodular.com` and keeps its `workers.dev`
+hostname enabled as a zoneless control. In a new fork, the `deploy` job in
+`.github/workflows/deploy.yml` self-skips until `CLOUDFLARE_API_TOKEN` exists;
+start at step 1 to reproduce the deployment.
 
 The README stays the reference for what the recipe does and how the routes
 behave. This file is only the setup order.
@@ -11,11 +13,13 @@ behave. This file is only the setup order.
 ## What gets deployed
 
 Cloudflare **Workers** with static assets (`[assets]` in `wrangler.toml`) plus
-the **Cache API** (`[cache] enabled = true`). There is **nothing to provision**
-— no KV namespace, no D1 database, no bucket, no zone. The Cache API is a
-runtime surface, not an account resource, so there is no dashboard object to
-create and no "Cache" permission to grant. `wrangler.toml` is already complete
-and holds no placeholder ids to fill in.
+the **Cache API** (`[cache] enabled = true`). There are no storage resources to
+provision — no KV namespace, D1 database, or bucket. The Cache API is a runtime
+surface, not an account resource, so there is no dashboard object to create and
+no "Cache" permission to grant. The `[[routes]]` block attaches the Worker to
+the existing `takazudomodular.com` zone as a custom domain; Cloudflare manages
+that hostname's DNS record and TLS certificate. `wrangler.toml` is already
+complete and holds no placeholder ids to fill in.
 
 ## 1. Create or reuse the API token
 
@@ -31,11 +35,13 @@ Token, with these permissions:
 | --- | --- | --- |
 | Account | Workers Scripts | Edit |
 | Account | Account Settings | Read |
+| Zone | Workers Routes | Edit |
 
-Set **Account Resources → Include → (your account)**. No Zone permissions are
-needed — this repo deploys to a `*.workers.dev` host, not a custom domain. If
-you are building the shared token, give it the union of every example repo's
-permissions instead of only the two above.
+Set **Account Resources → Include → (your account)** and **Zone Resources →
+Include → takazudomodular.com**. The Zone permission creates and maintains the
+custom-domain route in `wrangler.toml`. If you are building the shared token,
+give it the union of every example repo's permissions instead of only the three
+above.
 
 Copy the token value when it is shown; Cloudflare will not display it again.
 
@@ -70,8 +76,9 @@ request header.
 pnpm exec wrangler secret put PURGE_TOKEN
 ```
 
-This requires the Worker to exist, so run it **after** the first deploy (step 4)
-— or run it before and let step 4 pick it up on the next deploy either way.
+This requires the Worker to exist, so run it **after** the first deploy (step 4).
+`wrangler secret put` creates and immediately deploys a new Worker version, so
+the secret is active without another code deployment.
 
 Skipping it does not leave the purge route unguarded — it leaves it **disabled**.
 With no `PURGE_TOKEN` set, `POST /api/purge` returns `503` with
@@ -93,23 +100,25 @@ The `build` job runs on every push and PR and needs no credentials. The `deploy`
 job runs only on pushes to `main`, and now that the token exists its preflight
 passes and it runs `pnpm exec wrangler deploy`.
 
-The Worker lands at:
+The Worker is served on the production custom domain:
 
 ```
-https://zfb-example-workers-cache.takazudo.workers.dev
+https://zfb-example-workers-cache.takazudomodular.com
 ```
 
-`takazudo` is the account's workers.dev subdomain; substitute your own if you
-deployed to a different account.
+Because `workers_dev = true`, the same build also remains available at
+`https://zfb-example-workers-cache.<subdomain>.workers.dev`. Use it as the
+zoneless control described in the README; substitute your account's workers.dev
+subdomain for `<subdomain>`.
 
 ## 5. Verify
 
-Use the checks from the README's "Verify on workers.dev" section against the
-deployed URL — they only mean something on Cloudflare, since local Wrangler does
-not simulate Workers Cache.
+Use the checks from the README's "Verify a deploy" section against the custom
+domain — they only mean something on Cloudflare, since local Wrangler does not
+simulate Workers Cache.
 
 ```sh
-WORKER_URL="https://zfb-example-workers-cache.takazudo.workers.dev"
+WORKER_URL="https://zfb-example-workers-cache.takazudomodular.com"
 
 curl -si "$WORKER_URL/products" | grep -i "cf-cache-status\\|cache-control"
 curl -si "$WORKER_URL/products" | grep -i "cf-cache-status\\|cache-control"
@@ -157,7 +166,7 @@ which condition tripped. Note the job also only runs on `push`, never on a pull
 request.
 
 **`POST /api/purge` returns 503.** `PURGE_TOKEN` is not set on the Worker. Run
-step 3, then redeploy or wait for the next deploy.
+step 3; `wrangler secret put` deploys the new secret immediately.
 
 **`POST /api/purge` returns 401.** The `X-Purge-Token` header does not match the
 Worker secret. Re-set it with `wrangler secret put PURGE_TOKEN` and use the same
@@ -172,11 +181,11 @@ against the deployed Worker.
 **Every request is a MISS.** Expected locally: `pnpm preview` runs the built
 Worker through Wrangler, but local Wrangler dev does not simulate Workers Cache
 — repeated requests re-render and `Cf-Cache-Status` is absent entirely. Verify
-on workers.dev instead. On the deployed Worker, check that you are requesting a
-cacheable route: only `/products` and `/catalog` send a `public` `Cache-Control`;
-`/` and `/api/*` deliberately send `no-store`. On `/catalog`, remember each
-distinct `X-Catalog-Market` value is a separate cache entry, so the first request
-per market always misses.
+on the deployed custom domain instead. Check that you are requesting a cacheable
+route: only `/products` and `/catalog` send a `public` `Cache-Control`; `/` and
+`/api/*` deliberately send `no-store`. On `/catalog`, remember each distinct
+`X-Catalog-Market` value is a separate cache entry, so the first request per
+market always misses.
 
 **An editor flags the `[cache]` block in `wrangler.toml`.** Wrangler `4.85.0`
 accepts it, but its `config-schema.json` omits the field, so schema-aware editors
