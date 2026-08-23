@@ -11,9 +11,9 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "@takazudo/zfb": "2.3.0",
-    "@takazudo/zfb-adapter-cloudflare": "2.3.0",
-    "@takazudo/zfb-runtime": "2.3.0",
+    "@takazudo/zfb": "2.10.1",
+    "@takazudo/zfb-adapter-cloudflare": "2.10.1",
+    "@takazudo/zfb-runtime": "2.10.1",
     "preact": "^10.29.1",
     "preact-render-to-string": "^6.6.6"
   },
