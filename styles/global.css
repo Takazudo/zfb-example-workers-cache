@@ -1,5 +1,0 @@
-@import "tailwindcss";
-
-@source "pages/**/*.{tsx,ts,jsx,js}";
-@source "components/**/*.{tsx,ts,jsx,js}";
-@source "lib/**/*.{tsx,ts,jsx,js}";

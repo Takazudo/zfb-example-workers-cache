@@ -1,5 +1,3 @@
-import "../styles/global.css";
-
 import { CodeLine, Metric, Metrics, Note, Panel } from "../components/recipe-page";
 import { htmlResponse, NO_STORE } from "../lib/http";
 

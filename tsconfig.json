@@ -14,7 +14,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "preact",
+    "jsxImportSource": "@takazudo/zfb/zudo-react",
     "allowSyntheticDefaultImports": true,
     "verbatimModuleSyntax": false,
     "baseUrl": ".",
@@ -29,8 +29,7 @@
     "zfb-shim.d.ts",
     "pages/**/*",
     "components/**/*",
-    "lib/**/*",
-    "styles/**/*"
+    "lib/**/*"
   ],
   "exclude": ["node_modules", "dist", ".zfb", "build", "output", "worker"]
 }
