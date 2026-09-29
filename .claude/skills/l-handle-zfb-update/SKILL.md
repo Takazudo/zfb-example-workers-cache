@@ -18,6 +18,12 @@ responses with `Cache-Tag`, and expose a token-protected purge route that calls
 `ctx.cache.purge()`. It enables `[cache]` in `wrangler.toml` and uses a
 `PURGE_TOKEN` secret.
 
+Current floor: **zfb 3.0.0**. Pages are zudo-react JSX (`jsxImportSource:
+"@takazudo/zfb/zudo-react"`, HTML attribute spellings) rendered by the named
+`renderToString` from `@takazudo/zfb/zudo-react/server` in `lib/http.tsx`;
+styling is one inline `<style rawHtml>`, and the config is `wind: false`. There
+are no islands, no client JS, and no Preact or Tailwind anywhere.
+
 Bump every `@takazudo/*` package this repo depends on to the latest stable
 release (kept in lockstep on one version), review what changed upstream, and
 adapt this project only where an upstream change touches a surface it actually
@@ -81,11 +87,17 @@ Flag anything that touches a surface this example uses:
 
 | Upstream surface | Where this project uses it |
 | --- | --- |
-| `defineConfig` schema | `zfb.config.ts` — framework / adapter settings |
-| Cloudflare adapter + `ctx` (`ctx.cache.purge()`, `getCloudflareContext()`) | `pages/api/purge.tsx`, `lib/http.tsx` |
+| `defineConfig` schema | `zfb.config.ts` — `wind: false` + adapter |
+| zudo-react JSX runtime + types (`Child`, `rawHtml`, attribute spellings) | `components/recipe-page.tsx`, `tsconfig.json` (`jsxImportSource`) |
+| Server renderer (`@takazudo/zfb/zudo-react/server` `renderToString`) | `lib/http.tsx` — doctype prefix + headers are added here |
+| Cloudflare adapter + `ctx` (`ctx.cache.purge()`, `getCloudflareContext()`) | `pages/api/purge.tsx`, `pages/catalog.tsx` |
 | SSR route contract (`export const prerender = false`) | `pages/products.tsx`, `pages/catalog.tsx`, `pages/api/purge.tsx` |
 | Page components / data | `components/recipe-page.tsx`, `lib/product-data.ts` |
 | CLI (`zfb dev/build/preview/check`) | `package.json` scripts, `wrangler.toml` |
+
+**Major version bump (e.g. 3.x → 4.x) = migration, not a two-line edit.** Read
+the upstream migration guide for that major, audit every surface in the table,
+and run the full parity verification in Step 5 (not just build + typecheck).
 
 Rule: adapt only if this project actually uses the changed feature. Internal zfb
 changes (Rust internals, docs, other frameworks) need no action — note and move on.
@@ -110,17 +122,41 @@ Apply what the flagged notes require (config schema, renamed APIs, adapter or
 behavior changed. If nothing was flagged, skip.
 
 **Watch this coupling:** the purge route uses a narrow local widening for
-`ctx.cache` because `@takazudo/zfb-adapter-cloudflare` currently exposes a minimal
-`ctx` type. If an upstream bump adds `ctx.cache` to the adapter's types, remove
-that local widening (see `lib/http.tsx` / `pages/api/purge.tsx`).
+`ctx.cache` because `@takazudo/zfb-adapter-cloudflare` exposes a minimal `ctx`
+type and `getCloudflareContext<Env>()` types only `env`
+(Takazudo/zudo-front-builder#3387). If an upstream bump adds a documented way to
+type `ctx` extensions, adopt it in `pages/api/purge.tsx` — but keep the runtime
+`if (!cache)` 501 branch, because local Wrangler has no `ctx.cache`.
 
 ## Step 5 — Verify
 
 ```bash
 rm -rf ./dist ./.zfb ./.zfb-build
-pnpm build       # pages build cleanly, adapter writes dist/_worker.js + dist/.assetsignore
-pnpm typecheck   # zfb check passes
+pnpm typecheck   # zfb check passes — run first; its diagnostics beat build errors
+pnpm build       # adapter writes dist/_worker.js + dist/_zfb_inner.mjs + dist/.assetsignore
 ```
+
+Then assert the header contract against a **local** preview on an explicit free
+port (never the default smoke target — that is the live domain):
+
+```bash
+P=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+pnpm exec zfb preview --port $P --host 127.0.0.1 &
+SMOKE_BASE_URL=http://127.0.0.1:$P SMOKE_ASSERT_CACHE_TAG=1 SMOKE_REQUIRE_LIVE=1 pnpm smoke
+# stop it by port: the wrangler/workerd children survive killing zfb alone
+pkill -f "dev --port $P"; pkill -f "127.0.0.1:$P"
+```
+
+Require "Smoke test passed" — a skip is not a pass. For a **major** bump also:
+serve the old version from a `git worktree` side by side and diff the status +
+`cache-control` / `cache-tag` / `vary` headers and the parsed HTML of `/`,
+`/products`, `/catalog` (with `X-Catalog-Market: jp|eu`), `/api/purge` and an
+unknown path (normalize the render timestamp); screenshot both at 375 / 740 /
+780 / 1280 px (the one breakpoint is `max-width: 760px`); exercise the purge
+branches locally (GET 405, no token 503, wrong token 401, right token 501
+because local has no `ctx.cache`) with a throwaway `.dev.vars` you delete
+afterwards; and confirm `pnpm why preact` is empty. Never purge or smoke-test
+production by hand.
 
 Local Wrangler dev does not simulate Workers Cache (no `Cf-Cache-Status`, repeated
 requests re-render), so verify caching behavior on the deployed `*.workers.dev`
