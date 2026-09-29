@@ -1,5 +1,5 @@
-import type { ComponentChildren } from "preact";
-import renderToString from "preact-render-to-string";
+import type { Child } from "@takazudo/zfb/zudo-react";
+import { renderToString } from "@takazudo/zfb/zudo-react/server";
 
 import { RecipeDocument } from "../components/recipe-page";
 
@@ -21,7 +21,7 @@ type HtmlResponseOptions = {
   cacheTag?: string;
   vary?: string;
   status?: number;
-  children: ComponentChildren;
+  children: Child;
 };
 
 type JsonInit = {

@@ -4,6 +4,15 @@ An SSR recipe for Cloudflare Workers Cache with zfb. The pages return explicit
 HTTP cache headers, tag cached responses with `Cache-Tag`, and expose a small
 token-protected purge route.
 
+Built on zfb 3 (`@takazudo/zfb` 3.0.0). Every route is `prerender = false` and
+returns its own `Response`: `lib/http.tsx` renders the page JSX with the named
+`renderToString` from `@takazudo/zfb/zudo-react/server` (zfb's owned JSX runtime —
+`jsxImportSource` is `@takazudo/zfb/zudo-react`, and markup uses HTML attribute
+spellings such as `class` and `charset`), prepends `<!doctype html>`, and sets the
+cache headers itself. Styling is one trusted inline `<style>` in
+`components/recipe-page.tsx`, so `zfb.config.ts` sets `wind: false` and no
+stylesheet is built. The recipe ships no client JavaScript.
+
 ## Local run
 
 ```sh
@@ -157,8 +166,11 @@ request creates the entry.
 - Per-entrypoint cache controls and `cross_version_cache` currently require
   Wrangler `>=4.107.0`, so this example does not use them.
 - Latest Cloudflare Worker types include `ctx.cache`, but
-  `@takazudo/zfb-adapter-cloudflare` currently exposes a minimal `ctx` type. The
-  purge route uses a narrow local widening for `ctx.cache.purge()`.
+  `@takazudo/zfb-adapter-cloudflare` exposes a minimal `ctx` type, and the
+  `getCloudflareContext<Env>()` generic types only `env`
+  ([zudo-front-builder#3387](https://github.com/Takazudo/zudo-front-builder/issues/3387)).
+  The purge route uses a narrow local widening for `ctx.cache.purge()` and still
+  checks at runtime that `ctx.cache` exists.
 
 ## Continuous deployment (GitHub Actions)
 

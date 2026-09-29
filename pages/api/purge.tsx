@@ -53,9 +53,10 @@ export default async function PurgeRoute() {
     return jsonResponse({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  // The adapter currently exposes a minimal ctx type. Cloudflare's current
-  // runtime types include ctx.cache, so this local widening is intentionally
-  // narrow and limited to the purge API this route needs.
+  // The adapter's public ctx type is minimal and getCloudflareContext's generic
+  // only types env (Takazudo/zudo-front-builder#3387). Cloudflare's runtime
+  // types include ctx.cache, so this local widening is intentionally narrow and
+  // limited to the purge API this route needs.
   const cache = (ctx as CacheAwareExecutionContext).cache;
   if (!cache) {
     return jsonResponse(

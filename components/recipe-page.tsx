@@ -1,4 +1,4 @@
-import type { ComponentChildren } from "preact";
+import type { Child } from "@takazudo/zfb/zudo-react";
 
 type NavItem = {
   href: string;
@@ -12,7 +12,7 @@ type RecipeDocumentProps = {
   heading: string;
   summary: string;
   nav: NavItem[];
-  children: ComponentChildren;
+  children: Child;
 };
 
 type MetricProps = {
@@ -23,7 +23,7 @@ type MetricProps = {
 
 type PanelProps = {
   title: string;
-  children: ComponentChildren;
+  children: Child;
 };
 
 const pageStyles = `
@@ -334,10 +334,11 @@ export function RecipeDocument({
   return (
     <html lang="en">
       <head>
-        <meta charSet="utf-8" />
+        <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title}</title>
-        <style dangerouslySetInnerHTML={{ __html: pageStyles }} />
+        {/* pageStyles is a trusted module constant; rawHtml emits it unescaped. */}
+        <style rawHtml={pageStyles} />
       </head>
       <body>
         <div class="page">
@@ -381,7 +382,7 @@ export function Panel({ title, children }: PanelProps) {
   );
 }
 
-export function Metrics({ children }: { children: ComponentChildren }) {
+export function Metrics({ children }: { children: Child }) {
   return <div class="metrics">{children}</div>;
 }
 
@@ -394,10 +395,10 @@ export function Metric({ label, value, tone = "green" }: MetricProps) {
   );
 }
 
-export function CodeLine({ children }: { children: ComponentChildren }) {
+export function CodeLine({ children }: { children: Child }) {
   return <code class="code-line">{children}</code>;
 }
 
-export function Note({ children }: { children: ComponentChildren }) {
+export function Note({ children }: { children: Child }) {
   return <div class="note">{children}</div>;
 }
