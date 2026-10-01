@@ -165,12 +165,11 @@ request creates the entry.
   may flag the block even though Wrangler accepts it.
 - Per-entrypoint cache controls and `cross_version_cache` currently require
   Wrangler `>=4.107.0`, so this example does not use them.
-- Latest Cloudflare Worker types include `ctx.cache`, but
-  `@takazudo/zfb-adapter-cloudflare` exposes a minimal `ctx` type, and the
-  `getCloudflareContext<Env>()` generic types only `env`
+- The adapter's `getCloudflareContext<Env, CacheAwareExecutionContext>()`
+  types both bindings and the compatible execution-context extension
   ([zudo-front-builder#3387](https://github.com/Takazudo/zudo-front-builder/issues/3387)).
-  The purge route uses a narrow local widening for `ctx.cache.purge()` and still
-  checks at runtime that `ctx.cache` exists.
+  This is a caller-supplied type, not runtime feature detection. The purge route
+  keeps `cache` optional and returns 501 when the runtime has no `ctx.cache`.
 
 ## Continuous deployment (GitHub Actions)
 
