@@ -121,12 +121,12 @@ Apply what the flagged notes require (config schema, renamed APIs, adapter or
 `ctx` changes, island markup, etc.). Update `README.md` if commands or documented
 behavior changed. If nothing was flagged, skip.
 
-**Watch this coupling:** the purge route uses a narrow local widening for
-`ctx.cache` because `@takazudo/zfb-adapter-cloudflare` exposes a minimal `ctx`
-type and `getCloudflareContext<Env>()` types only `env`
-(Takazudo/zudo-front-builder#3387). If an upstream bump adds a documented way to
-type `ctx` extensions, adopt it in `pages/api/purge.tsx` — but keep the runtime
-`if (!cache)` 501 branch, because local Wrangler has no `ctx.cache`.
+**Watch this coupling:** the purge route uses the adapter's second generic,
+`getCloudflareContext<Env, CacheAwareExecutionContext>()`, with a local interface
+extending `CloudflareExecutionContext` and optional `cache`. This replaces the
+pre-3.1.0 cast (Takazudo/zudo-front-builder#3387). Keep the runtime `if (!cache)`
+501 branch: the generic does not add or detect bindings, and local Wrangler has
+no `ctx.cache`.
 
 ## Step 5 — Verify
 

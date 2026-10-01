@@ -1,4 +1,4 @@
-import { getCloudflareContext } from "@takazudo/zfb-adapter-cloudflare";
+import { getCloudflareContext, type CloudflareExecutionContext } from "@takazudo/zfb-adapter-cloudflare";
 
 import { jsonResponse } from "../../lib/http";
 
@@ -20,14 +20,14 @@ type WorkersCacheContext = {
   purge(options: { tags: string[] }): Promise<CachePurgeResult>;
 };
 
-type CacheAwareExecutionContext = {
+interface CacheAwareExecutionContext extends CloudflareExecutionContext {
   cache?: WorkersCacheContext;
-};
+}
 
 const encoder = new TextEncoder();
 
 export default async function PurgeRoute() {
-  const { env, ctx, request } = getCloudflareContext<Env>();
+  const { env, ctx, request } = getCloudflareContext<Env, CacheAwareExecutionContext>();
 
   if (request.method !== "POST") {
     return jsonResponse(
@@ -53,11 +53,7 @@ export default async function PurgeRoute() {
     return jsonResponse({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  // The adapter's public ctx type is minimal and getCloudflareContext's generic
-  // only types env (Takazudo/zudo-front-builder#3387). Cloudflare's runtime
-  // types include ctx.cache, so this local widening is intentionally narrow and
-  // limited to the purge API this route needs.
-  const cache = (ctx as CacheAwareExecutionContext).cache;
+  const cache = ctx.cache;
   if (!cache) {
     return jsonResponse(
       {
