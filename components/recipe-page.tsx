@@ -149,6 +149,7 @@ const pageStyles = `
   }
 
   .panel {
+    min-width: 0;
     border: 1px solid #d7e0da;
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.78);
@@ -166,6 +167,7 @@ const pageStyles = `
   }
 
   .panel-body {
+    overflow-x: auto;
     padding: 16px;
   }
 
