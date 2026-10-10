@@ -64,6 +64,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Test built Worker with local bindings
+        run: pnpm test:worker
+
       # The header contract (Cache-Control, Vary, Cache-Tag) asserted against a
       # local preview. This is the only place Cache-Tag CAN be asserted — the
       # Cloudflare edge consumes and strips it, so the post-deploy run below can

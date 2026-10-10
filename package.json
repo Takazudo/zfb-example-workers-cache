@@ -8,12 +8,13 @@
     "build": "zfb build",
     "preview": "zfb preview",
     "typecheck": "zfb check",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test:worker": "node --test scripts/worker-contract.test.mjs"
   },
   "dependencies": {
-    "@takazudo/zfb": "3.1.0",
-    "@takazudo/zfb-adapter-cloudflare": "3.1.0",
-    "@takazudo/zfb-runtime": "3.1.0"
+    "@takazudo/zfb": "4.3.0",
+    "@takazudo/zfb-adapter-cloudflare": "4.3.0",
+    "@takazudo/zfb-runtime": "4.3.0"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
