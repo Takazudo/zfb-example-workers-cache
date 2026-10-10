@@ -283,3 +283,12 @@ domain is never attached.
 
 A single token can be shared across all `zfb-example-*` repos if it carries the
 union of every repo's permissions.
+
+### Local built-Worker regression checks
+
+After `pnpm build`, run `pnpm test:worker`. These tests import the emitted Worker
+with test-only asset and execution-context bindings. They cover response headers,
+market variants, asset fallback, all purge response branches, and tag invalidation
+in a small header-driven cache double. Its MISS/HIT and URL/`Vary` key assertions
+verify the recipe's contract; they do **not** verify Cloudflare's edge cache, TTL,
+or stale revalidation. No production service or cache is contacted.
