@@ -4,7 +4,7 @@ An SSR recipe for Cloudflare Workers Cache with zfb. The pages return explicit
 HTTP cache headers, tag cached responses with `Cache-Tag`, and expose a small
 token-protected purge route.
 
-Built on zfb 3 (`@takazudo/zfb` 3.0.0). Every route is `prerender = false` and
+Built on zfb 4 (`@takazudo/zfb` 4.4.0). Every route is `prerender = false` and
 returns its own `Response`: `lib/http.tsx` renders the page JSX with the named
 `renderToString` from `@takazudo/zfb/zudo-react/server` (zfb's owned JSX runtime —
 `jsxImportSource` is `@takazudo/zfb/zudo-react`, and markup uses HTML attribute
