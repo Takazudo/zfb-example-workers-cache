@@ -4,7 +4,7 @@ An SSR recipe for Cloudflare Workers Cache with zfb. The pages return explicit
 HTTP cache headers, tag cached responses with `Cache-Tag`, and expose a small
 token-protected purge route.
 
-Built on zfb 3 (`@takazudo/zfb` 3.0.0). Every route is `prerender = false` and
+Built on zfb 6 (`@takazudo/zfb` 6.0.1). Every route is `prerender = false` and
 returns its own `Response`: `lib/http.tsx` renders the page JSX with the named
 `renderToString` from `@takazudo/zfb/zudo-react/server` (zfb's owned JSX runtime —
 `jsxImportSource` is `@takazudo/zfb/zudo-react`, and markup uses HTML attribute
@@ -21,6 +21,9 @@ pnpm dev
 pnpm build
 pnpm preview
 ```
+
+`pnpm install` and the `zfb` commands need Node.js 24 or newer. `@takazudo/zfb`
+6 declares `engines.node` `>=24`.
 
 `pnpm dev` is useful for page-authoring feedback. `pnpm preview` runs the built
 Worker through Wrangler, but current local Wrangler dev does not simulate
