@@ -12,9 +12,9 @@
     "test:worker": "node --test scripts/worker-contract.test.mjs"
   },
   "dependencies": {
-    "@takazudo/zfb": "4.7.0",
-    "@takazudo/zfb-adapter-cloudflare": "4.7.0",
-    "@takazudo/zfb-runtime": "4.7.0"
+    "@takazudo/zfb": "6.0.1",
+    "@takazudo/zfb-adapter-cloudflare": "6.0.1",
+    "@takazudo/zfb-runtime": "6.0.1"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
@@ -22,6 +22,6 @@
   },
   "packageManager": "pnpm@10.34.1",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.0.0"
   }
 }

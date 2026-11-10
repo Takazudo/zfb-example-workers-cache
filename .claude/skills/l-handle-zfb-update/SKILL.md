@@ -18,7 +18,7 @@ responses with `Cache-Tag`, and expose a token-protected purge route that calls
 `ctx.cache.purge()`. It enables `[cache]` in `wrangler.toml` and uses a
 `PURGE_TOKEN` secret.
 
-Current floor: **zfb 3.0.0**. Pages are zudo-react JSX (`jsxImportSource:
+Current floor: **zfb 6.0.1**. Pages are zudo-react JSX (`jsxImportSource:
 "@takazudo/zfb/zudo-react"`, HTML attribute spellings) rendered by the named
 `renderToString` from `@takazudo/zfb/zudo-react/server` in `lib/http.tsx`;
 styling is one inline `<style rawHtml>`, and the config is `wind: false`. There
