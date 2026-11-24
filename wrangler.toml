@@ -41,9 +41,9 @@ preview_urls = true
 # files and all of them reach the worker. (This example does no per-request
 # gating, which is the case that would require `true`.)
 #
-# .assetsignore: zfb's build writes one into dist/ listing _worker.js and
-# _zfb_inner.mjs so those are excluded from the public asset directory. It is
-# generated at build time — not committed.
+# .assetsignore: zfb's build writes one into dist/ with root-anchored rules
+# `/_worker.js` and `/_zfb_inner.mjs` so those are excluded from the public
+# asset directory. It is generated at build time — not committed.
 # ---------------------------------------------------------------------------
 [assets]
 directory = "./dist"
